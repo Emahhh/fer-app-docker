@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FER Model - Group 5</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --panel-bg: #16213e;
+            --text-color: #e94560;
+            --bar-bg: #0f3460;
+            --bar-fill: #e94560;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-color);
+            color: white;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { margin-bottom: 20px; color: var(--text-color); }
+
+        .main-container {
+            display: flex;
+            gap: 20px;
+            background: var(--panel-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+
+        #video-wrapper {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        /* Mirror effect for video and overlay */
+        #video, #overlay {
+            position: absolute;
+            top: 0; left: 0;
+            transform: scaleX(-1);
+        }
+
+        #results-panel {
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h3 { margin-top: 0; color: var(--text-color); border-bottom: 1px solid var(--bar-bg); padding-bottom: 10px;}
+
+        .gauge-item {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .gauge-label {
+            flex: 1;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .progress-bar-bg {
+            flex: 3;
+            height: 20px;
+            background: var(--bar-bg);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 0 10px;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--bar-fill);
+            width: 0%;
+            transition: width 0.3s ease-in-out;
+        }
+        .gauge-value {
+            flex: 0.8;
+            font-size: 12px;
+            text-align: right;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>FER Model - Group 5</h1>
+    
+    <div class="main-container">
+        <div id="video-wrapper">
+            <video id="video" width="640" height="480" autoplay playsinline muted></video>
+            <canvas id="overlay" width="640" height="480"></canvas>
+        </div>
+
+        <div id="results-panel">
+            <h3>Predictions</h3>
+            <div id="gauges-list">
+                <p>Waiting for detection...</p>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="capture" width="640" height="480" style="display:none;"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const ctxOverlay = overlay.getContext('2d');
+        const capture = document.getElementById('capture');
+        const ctxCapture = capture.getContext('2d');
+        const gaugesList = document.getElementById('gauges-list');
+
+        const EMOTIONS_LIST = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surprise'];
+
+        // Access Webcam
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => { video.srcObject = stream; })
+            .catch(err => { console.error("Webcam error:", err); });
+
+        function updateGauges(scores) {
+            gaugesList.innerHTML = '';
+            
+            scores.forEach((score, index) => {
+                const emotionName = EMOTIONS_LIST[index];
+                const percentage = (score * 100).toFixed(1);
+                
+                const gaugeItem = document.createElement('div');
+                gaugeItem.className = 'gauge-item';
+                gaugeItem.innerHTML = `
+                    <span class="gauge-label">${emotionName}</span>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" style="width: ${percentage}%"></div>
+                    </div>
+                    <span class="gauge-value">${percentage}%</span>
+                `;
+                gaugesList.appendChild(gaugeItem);
+            });
+        }
+
+        async function sendFrame() {
+            if (!video.videoWidth) return;
+
+            // Draw current frame to hidden canvas (not mirrored)
+            ctxCapture.drawImage(video, 0, 0, video.width, video.height);
+            
+            capture.toBlob(blob => {
+                const formData = new FormData();
+                formData.append('image', blob);
+
+                fetch('/predict', { method: 'POST', body: formData })
+                    .then(response => response.json())
+                    .then(data => {
+                        ctxOverlay.clearRect(0, 0, overlay.width, overlay.height);
+                        
+                        if (data.length > 0) {
+                            const mainFace = data[0];
+                            updateGauges(mainFace.all_scores);
+
+                            // Draw boxes and labels for all faces
+                            data.forEach(face => {
+                                const {x, y, w, h} = face.box;
+                                
+                                // Draw Box
+                                ctxOverlay.strokeStyle = "#e94560";
+                                ctxOverlay.lineWidth = 3;
+                                ctxOverlay.strokeRect(x, y, w, h);
+                                
+                                // Draw Text (Corrected for Mirroring)
+                                ctxOverlay.save(); // Save current state
+                                ctxOverlay.font = "bold 20px Arial";
+                                ctxOverlay.fillStyle = "#e94560";
+                                
+                                // Create label string with confidence
+                                const labelText = `${face.top_emotion} ${face.top_confidence}%`;
+
+                                // Move context to the position where text should start
+                                ctxOverlay.translate(x, y - 10);
+                                // Flip context horizontally internally to counteract CSS flip
+                                ctxOverlay.scale(-1, 1); 
+                                // Draw text (align right because axis is flipped)
+                                ctxOverlay.textAlign = "right"; 
+                                ctxOverlay.fillText(labelText, 0, 0);
+                                
+                                ctxOverlay.restore(); // Restore state
+                            });
+                        } else {
+                             gaugesList.innerHTML = '<p>No face detected</p>';
+                        }
+                    })
+                    .catch(err => console.error("Prediction error:", err));
+            }, 'image/jpeg');
+        }
+
+        
+        setInterval(sendFrame, 100);
+    </script>
+</body>
+</html>
